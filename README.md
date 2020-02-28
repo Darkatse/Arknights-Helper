@@ -21,9 +21,9 @@ A qq bot based on nonebot and coolq
 
 3. ~~tell character name~~
 
-4. @this_bot update_data
+4. ~~@this_bot update_data~~
 
->update character data from wiki
+>~~update character data from wiki~~
 
 ## 由于着迷网Wiki关闭  tag查询等以上功能暂不可用 以下功能目前可用：
 
