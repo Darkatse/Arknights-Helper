@@ -1,63 +1,54 @@
-# QQ bot-Arknights Helper
+# QQ bot-Arknights Helper-Remix
 A qq bot based on nonebot and coolq
 
 ## Description
-It can help you choose which tag/tags to use in "公开招募"
-
-<img src="https://i.loli.net/2019/05/11/5cd67db6f1250.jpg" alt="Screenshot_20190511_154352_com.tencent.mobileqq.jpg" title="Screenshot_20190511_154352_com.tencent.mobileqq.jpg" width = "250"/>
-
+目前功能：材料规划 抽卡
 ## Usage
-1. tag list split by space
->e.g. 近卫 男
- 
->**Result**\
->【近卫】:
->幽灵鲨★5, 因陀罗★5, 杜宾★4, 艾丝黛尔★4, 慕斯★4, 霜叶★4, 缠丸★4, Castle-3★1, ★1~3...1
+1. ~~tag list split by space~~
+>~~e.g. 近卫 男~~
+
+>**~~Result~~**\
+>~~【近卫】:~~
+>~~幽灵鲨★5, 因陀罗★5, 杜宾★4, 艾丝黛尔★4, 慕斯★4, 霜叶★4, 缠丸★4, Castle-3★1, ★1~3...1~~
 >
->【男】:
->角峰★4, Castle-3★1, ★1~3...6
+>~~【男】:~~
+>~~角峰★4, Castle-3★1, ★1~3...6~~
 >
->【近卫+男】:
->Castle-3★1
+>~~【近卫+男】:~~
+>~~Castle-3★1~~
 
-2. tell character name
->e.g. tell 艾雅法拉
+2. ~~send a screenshot of tags in game, get result as above~~
 
->**Result**\
->姓名: 艾雅法拉\
->阵营: 卡普里尼\
->职业: 术师\
->星级: 6\
->性别: 女\
->是否感染: 是\
->获取途径: 干员寻访\
->初始生命: 732\
->初始攻击: 292\
->初始防御: 46\
->初始法抗: 10\
->再部署: 慢\
->部署费用: 19\
->完美部署费用: 19\
->阻挡数: 1\
->攻击速度: 较慢\
->特性: 攻击造成法术伤害\
->标签: 远程位、输出、削弱
+3. ~~tell character name~~
 
-3. @this_bot hello
+## 由于灰机Wiki关闭  tag查询暂不可以
+
+4. @this_bot hello
 
 >tell you some info about this bot
 
-4. @this_bot update_data
+5. @this_bot update_data
 
 >update character data from wiki
 
 ## File Structure
 ```
 ├─akaisora-bot
+   ├─data      Arkplanner数据 删除并重启bot以更新数据
+   │  │ formula.json   
+   │  └─matrix.json
    ├─akaisora
    │  └─plugins
    │      │  recom_tags.py
-   │      └─ chardata.html
+   │      │  checklog.py         保存log
+   │      │  fuzzname.py         拼音模糊查询
+   │      │  material.py         材料规划
+   │      │  MaterialPlanning.py 材料规划接口 来自https://github.com/ycremar/ArkPlanner
+   │      │  orc_tool.py         图片识别
+   │      │  record.py           
+   │      │  recruit.py          抽卡
+   │      └─ tuchuang.py         图床 用于图片识别
+   │  apikeys.py      百度图片识别api
    │  bot.py
    └─ config.py
 ```
@@ -65,7 +56,11 @@ It can help you choose which tag/tags to use in "公开招募"
 ## Install Requirement
 ```
 Python: Python>=3.6.1
-Packages: nonebot>=1.3.0
+Packages:   nonebot>=1.3.0
+            numpy>=1.18.1
+            sanic>=19.12.2
+            scipy>=1.4.1
+            Click>=7.0
 ```
 
 ## Usage
