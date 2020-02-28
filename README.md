@@ -21,15 +21,19 @@ A qq bot based on nonebot and coolq
 
 3. ~~tell character name~~
 
-## 由于着迷网Wiki关闭  tag查询暂不可用
-
-4. @this_bot hello
-
->tell you some info about this bot
-
-5. @this_bot update_data
+4. @this_bot update_data
 
 >update character data from wiki
+
+## 由于着迷网Wiki关闭  tag查询等以上功能暂不可用 以下功能目前可用：
+
+5. @this_bot arkone / arkten
+
+>抽卡 卡池位于recruit.py 需要手动更新
+
+
+
+6. mati/材料 固源岩组
 
 ## File Structure
 ```

@@ -37,7 +37,7 @@ async def tagrc(session: CommandSession):
     # 发送消息
     await session.send(tagrc_report)
     
-@on_command('bot_help', aliases=(), only_to_me=True)
+@on_command('bot_help', aliases=(), only_to_me=False)
 async def hello(session: CommandSession):
 
     info_msg="""明日方舟 公开招募助手机器人
