@@ -21,7 +21,7 @@ A qq bot based on nonebot and coolq
 
 3. ~~tell character name~~
 
-## 由于灰机Wiki关闭  tag查询暂不可以
+## 由于灰机Wiki关闭  tag查询暂不可用
 
 4. @this_bot hello
 
