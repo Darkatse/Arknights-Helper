@@ -9,7 +9,7 @@ It can help you choose which tag/tags to use in "公开招募"
 ## Usage
 1. tag list split by space
 >e.g. 近卫 男
-
+ 
 >**Result**\
 >【近卫】:
 >幽灵鲨★5, 因陀罗★5, 杜宾★4, 艾丝黛尔★4, 慕斯★4, 霜叶★4, 缠丸★4, Castle-3★1, ★1~3...1
