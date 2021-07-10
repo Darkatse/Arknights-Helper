@@ -12,7 +12,8 @@ sys.path.append(o_path)
 o_path=o_path+"/akaisora/plugins/"
 sys.path.append(o_path)
 from apikeys import *
-from fuzzname import Fuzzname
+#from fuzzname import Fuzzname
+from tag_processing import Tag_Processing
 #from ocr_tool import Ocr_tool
 from material import Material
 from record import Record
@@ -24,7 +25,7 @@ path_prefix="./akaisora/plugins/"
 # some comments below is from the demo code of nonebot
 
 
-@on_command('tagrc', aliases=(), only_to_me=False)
+@on_command('tagrc', aliases=("公招",), only_to_me=False)
 async def tagrc(session: CommandSession):
     
     # tags = session.get('tags', prompt='输入tag列表，空格隔开')
@@ -42,16 +43,12 @@ async def hello(session: CommandSession):
 
     info_msg="""明日方舟 公开招募助手机器人
 用法:
-X1.输入词条列表，空格隔开
-    如: 近卫 男
-X2.发送招募词条截图
-X3.tell 干员名称
-    如: tell 艾雅法拉
-由于飞机Wiki关闭 该功能暂不可用
-4.mati/材料 固源岩组
-5.mati/材料
+X1.公招+词条列表，空格隔开
+    如: 公招 治疗 先锋干员
+2.mati/材料 固源岩组
+3.mati/材料
     (不加名称，查看表格)
-Github链接: https://github.com/Minamion/QQ-bot-Arknights-Helper"""
+Github链接: https://github.com/Darkatse/Arknights-Helper"""
 
     await session.send(info_msg)
     
@@ -85,7 +82,6 @@ async def mati(session: CommandSession):
         url="https://arkonegraph.herokuapp.com/"
         report=url
     else:
-        
         report = await get_material_recom(name=name)
         if report is None: return 
     # 发送消息
@@ -95,13 +91,12 @@ async def mati(session: CommandSession):
 async def stat(session: CommandSession):
     name=session.state['name'] if 'name' in session.state else None
     if name:
-        
         report = await get_stat_report(name=name)
         if report is None: return 
     # 发送消息
     await session.send(report)
 
-# weather.args_parser 装饰器将函数声明为 weather 命令的参数解析器
+# tagrc.args_parser 装饰器将函数声明为 tagrc 命令的参数解析器
 # 命令解析器用于将用户输入的参数解析成命令真正需要的数据
 @tagrc.args_parser
 async def _(session: CommandSession):
@@ -112,29 +107,17 @@ async def _(session: CommandSession):
     print("stripped_arg", stripped_arg)
     print("images_arg", images_arg)
     if session.is_first_run:
-        # 该命令第一次运行（第一次进入命令会话）
         if stripped_arg:
-            # 第一次运行参数不为空，意味着用户直接将城市名跟在命令名后面，作为参数传入
-            # 例如用户可能发送了：天气 南京
             session.state['tags'] = stripped_arg
         elif images_arg:
             session.state['images'] = images_arg
         return
-
-    # if not stripped_arg:
-        # # 用户没有发送有效的城市名称（而是发送了空白字符），则提示重新输入
-        # # 这里 session.pause() 将会发送消息并暂停当前会话（该行后面的代码不会被运行）
-        # session.pause('输入错误，请重新输入')
-
-    # 如果当前正在向用户询问更多信息（例如本例中的要查询的城市），且用户输入有效，则放入会话状态
-    # session.state[session.current_key] = stripped_arg
 
 # on_natural_language 装饰器将函数声明为一个自然语言处理器
 # keywords 表示需要响应的关键词，类型为任意可迭代对象，元素类型为 str
 # 如果不传入 keywords，则响应所有没有被当作命令处理的消息
 @on_natural_language(only_to_me=False, keywords=None)
 async def _(session: NLPSession):
-
     stripped_msg = session.msg_text.strip()
     msg=session.msg
 
@@ -152,8 +135,6 @@ async def _(session: CommandSession):
     if session.is_first_run:
         # 该命令第一次运行（第一次进入命令会话）
         if stripped_arg:
-            # 第一次运行参数不为空，意味着用户直接将城市名跟在命令名后面，作为参数传入
-            # 例如用户可能发送了：天气 南京
             session.state['name'] = stripped_arg
         return
 
@@ -166,8 +147,6 @@ async def _(session: CommandSession):
     if session.is_first_run:
         # 该命令第一次运行（第一次进入命令会话）
         if stripped_arg:
-            # 第一次运行参数不为空，意味着用户直接将城市名跟在命令名后面，作为参数传入
-            # 例如用户可能发送了：天气 南京
             session.state['name'] = stripped_arg
         return
 
@@ -180,8 +159,6 @@ async def _(session: CommandSession):
     if session.is_first_run:
         # 该命令第一次运行（第一次进入命令会话）
         if stripped_arg:
-            # 第一次运行参数不为空，意味着用户直接将城市名跟在命令名后面，作为参数传入
-            # 例如用户可能发送了：天气 南京
             session.state['name'] = stripped_arg
         return
 
@@ -189,7 +166,7 @@ async def _(session: CommandSession):
 async def get_recomm_tags(tags: str, images: list) -> str:
     # 这里简单返回一个字符串
     tags_list=tags.split() if tags else []
-    report=tags_recom.recom(tags_list, images)
+    report=Tag_Processing().calculate(tags_list)
     
     return report
     
@@ -390,7 +367,7 @@ class Character(object):
 
         return char_data
 
-    def fetch_enemy_from_akmooncell(self, filename="enemylist.json"):
+    def fetch_enemy_from_prts(self, filename="enemylist.json"):
         # get enemy data
         r=requests.get("http://ak.mooncell.wiki/w/敌人一览")
         if r.status_code!=200: raise IOError("Cannot fetch enemy from akmooncell")
@@ -711,8 +688,8 @@ if __name__=="__main__":
 
 
 
-    res=material_recom.recom("聚酸酯块")
-    print(res)
+    #res=material_recom.recom("聚酸酯块")
+    print(get_recomm_tags('治疗 先锋干员'))
 
     # for i in range(20):
     #     tags_recom.recom(["狙击干员","辅助干员", "削弱", "女性干员", "治疗"])

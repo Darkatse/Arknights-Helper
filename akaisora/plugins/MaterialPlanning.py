@@ -1,13 +1,12 @@
-# https://github.com/ycremar/ArkPlanner
-
 import numpy as np
 import urllib.request, json, time, os, copy, sys
 from scipy.optimize import linprog
 from collections import defaultdict as ddict
 
-global penguin_url, headers
-penguin_url = 'https://penguin-stats.io/PenguinStats/api/'
+global penguin_url, headers, LanguageMap
+penguin_url = 'https://penguin-stats.io/PenguinStats/api/v2/'
 headers = {'User-Agent':'ArkPlanner'}
+LanguageMap = {'CN': 'zh', 'US': 'en', 'JP': 'ja', 'KR': 'ko'}
 
 #谜之bug读不了文件 那就手动来吧（
 Price = dict()
@@ -38,13 +37,14 @@ Price['固源岩组'] = int(25)
 Price['招聘许可'] = int(15)
 Price['寻访凭证'] = int(450)
 Price['芯片助剂'] = int(15)
-
+Price['晶体电路'] = int(15)
+Price['晶体元件'] = int(30)
 
 class MaterialPlanning(object):
     def __init__(self,
                  filter_freq=200,
                  filter_stages=[],
-                 url_stats='result/matrix?show_stage_details=true&show_item_details=true',
+                 url_stats='result/matrix?show_closed_zone=true',
                  url_rules='formula',
                  path_stats='data/matrix.json',
                  path_rules='data/formula.json',
@@ -63,38 +63,43 @@ class MaterialPlanning(object):
             path_stats: string. local path to the dropping rate stats data.
             path_rules: string. local path to the composing rules data.
         """
-        try:
-            material_probs, self.convertion_rules = load_data(path_stats, path_rules)
-        except:
-            print('exceptRequesting data from web resources (i.e., penguin-stats.io)...', end=' ')
-            material_probs, self.convertion_rules = request_data(penguin_url+url_stats, penguin_url+url_rules, path_stats, path_rules)
-            print('done.')
-        if update:
-            print('Requesting data from web resources (i.e., penguin-stats.io)...', end=' ')
-            material_probs, self.convertion_rules = request_data(penguin_url+url_stats, penguin_url+url_rules, path_stats, path_rules)
-            print('done.')
-
-        self.exp_factor = 1
-
-        self.material_probs = material_probs
-        self.banned_stages = banned_stages
+        self.banned_stages = banned_stages # for debugging
         self.display_main_only = display_main_only
-        self.stage_times = ddict(int)
-
-        filtered_probs = []
-        needed_stage = []
-        for dct in material_probs['matrix']:
-            if dct['times'] > self.stage_times[dct['stage']['code']] or self.stage_times[dct['stage']['code']] == 0:
-                self.stage_times[dct['stage']['code']] = dct['times']
-            if dct['times']>=filter_freq and dct['stage']['code'] not in filter_stages:
-                filtered_probs.append(dct)
-            elif dct['stage']['code'] not in needed_stage:
-                needed_stage.append(dct['stage']['code'])
-        material_probs['matrix'] = filtered_probs
         self.ConvertionDR = ConvertionDR
-        self._pre_processing(material_probs)
-        self._set_lp_parameters()
 
+        self.update(force=update)
+
+    def get_item_id(self):
+        items = get_json('items')
+        item_array, item_id_to_name = [], {}
+        item_name_to_id = {'id': {},
+                           'zh': {},
+                           'en': {},
+                           'ja': {},
+                           'ko': {}}
+
+        additional_items = [
+                            {'itemId': '4001', 'name_i18n': {'ko': '용문폐', 'ja': '龍門幣', 'en': 'LMD', 'zh': '龙门币'}},
+                            {'itemId': '0010', 'name_i18n': {'ko': '작전기록', 'ja': '作戦記録', 'en': 'Battle Record', 'zh': '作战记录'}}
+                           ]
+        for x in items + additional_items:
+            item_array.append(x['itemId'])
+            item_id_to_name.update({x['itemId']: {'id': x['itemId'],
+                                                  'zh': x['name_i18n']['zh'],
+                                                  'en': x['name_i18n']['en'],
+                                                  'ja': x['name_i18n']['ja'],
+                                                  'ko': x['name_i18n']['ko']}})
+            item_name_to_id['id'].update({x['itemId']:          x['itemId']})
+            item_name_to_id['zh'].update({x['name_i18n']['zh']: x['itemId']})
+            item_name_to_id['en'].update({x['name_i18n']['en']: x['itemId']})
+            item_name_to_id['ja'].update({x['name_i18n']['ja']: x['itemId']})
+            item_name_to_id['ko'].update({x['name_i18n']['ko']: x['itemId']})
+
+        self.item_array = item_array
+        self.item_id_to_name = item_id_to_name
+        self.item_name_to_id = item_name_to_id
+        self.item_dct_rv = {v: k for k, v in enumerate(item_array)} # from id to idx
+        self.item_name_rv = {item_id_to_name[v]['zh']: k for k, v in enumerate(item_array)} # from (zh) name to idx
 
 
     def _pre_processing(self, material_probs):
@@ -106,59 +111,71 @@ class MaterialPlanning(object):
             convertion_rules: List of dictionaries recording the rules of composing.
                 Keys of instances: ["id", "name", "level", "source", "madeof"].
         """
-        # To count items and stages.
-        additional_items = {'30135': u'D32钢', '30125': u'双极纳米片',
-                            '30115': u'聚合剂', '00010':'经验', '4001':'龙门币',
-                            '31014':'聚合凝胶', '31024':'炽合金块', '31013':'凝胶',
-                            '31023':'炽合金'
-                            }
-        item_dct = {}
-        stage_dct = {}
-        self.stage_array = []
-        for dct in material_probs['matrix']:
-            item_dct[dct['item']['itemId']]=dct['item']['name']
-            stage_dct[dct['stage']['code']]=dct['stage']['code']
-        item_dct.update(additional_items)
-        # To construct mapping from id to item names.
-        item_array = []
-        item_id_array = []
-        for k,v in item_dct.items():
+        # construct item id projections.
+        # construct stage id projections.
+        stage_array = []
+        for drop in material_probs['matrix']:
+            if drop['stageId'] not in stage_array:
+                stage_array.append(drop['stageId'])
+        stage_dct_rv = {v: k for k, v in enumerate(stage_array)}
+        servers = ['CN', 'US', 'JP', 'KR']
+        languages = ['zh', 'en', 'ja', 'ko']
+
+        valid_stages = {server: [False]*len(stage_array) for server in servers}
+        stage_code = {server: ['' for _ in stage_array] for server in servers}
+        stages = {}
+        stage_name_rv = {lang: {} for lang in languages}
+        stage_id_to_name = {}
+        for server in servers:
             try:
-                float(k)
-                item_array.append(v)
-                item_id_array.append(k)
-            except:
-                pass
+                stages[server] = get_json(f'stages?server={server}')
+            except Exception as e:
+                print(f'Failed to load server {server}, Error: {e}')
+                return -1
+            for stage in stages[server]:
+                if stage['stageId'] not in stage_dct_rv or 'dropInfos' not in stage:
+                    continue
+                valid_stages[server][stage_dct_rv[stage['stageId']]] = True
+                stage_code[server][stage_dct_rv[stage['stageId']]] =  stage['code_i18n'][LanguageMap[server]]
+                for lang in languages: stage_name_rv[lang][stage['code_i18n'][lang]] = stage_dct_rv[stage['stageId']]
+                stage_id_to_name[stage['stageId']] = {lang: stage['code_i18n'][lang] for lang in languages}
+                # Fix KeyError('id')
+                stage_id_to_name[stage['stageId']]["id"] = stage['stageId']
+                
+        try:
+            self.get_item_id()
+        except Exception as e:
+            print(f'Failed to load item list, Error: {e}')
+            return -1
 
-        self.item_array = np.array(item_array)
-        self.item_id_array = np.array(item_id_array)
-        self.item_dct_rv = {v:k for k,v in enumerate(item_array)}
-        self.item_id_to_name = {self.item_id_array[k]:item for k,item in enumerate(item_array)}
-        self.item_name_to_id = {item:self.item_id_array[k] for k,item in enumerate(item_array)}
-        # To construct mapping from stage id to stage names and vice versa.
-        for k,v in stage_dct.items():
-            if v not in self.banned_stages:
-                self.stage_array.append(v)
-
-        self.stage_dct_rv = {v:k for k,v in enumerate(self.stage_array)}
+        self.stage_array = stage_array
+        self.stage_dct_rv = stage_dct_rv
+        self.stage_code = stage_code
+        self.valid_stages = valid_stages
+        self.stage_name_rv = stage_name_rv
+        self.stage_id_to_name = stage_id_to_name
 
         # To format dropping records into sparse probability matrix
         self.cost_lst = np.zeros(len(self.stage_array))
 
+        for server in servers:
+            for stage in stages[server]:
+                if stage['stageId'] in self.stage_dct_rv:
+                    self.cost_lst[self.stage_dct_rv[stage['stageId']]] = stage['apCost']
+
         self.update_stage()
         self.stage_array = np.array(self.stage_array)
-        self.probs_matrix = np.zeros([len(self.stage_array), len(item_array)])
+        self.probs_matrix = np.zeros([len(self.stage_array), len(self.item_array)])
 
-        for dct in material_probs['matrix']:
+        for drop in material_probs['matrix']:
             try:
-                self.cost_lst[self.stage_dct_rv[dct['stage']['code']]] = dct['stage']['apCost']
-                self.probs_matrix[self.stage_dct_rv[dct['stage']['code']], self.item_dct_rv[dct['item']['name']]] = dct['quantity']/float(dct['times'])
+                self.probs_matrix[self.stage_dct_rv[drop['stageId']], self.item_dct_rv[drop['itemId']]] = drop['quantity']/float(drop['times'])
             except:
-                pass
+                print(f'Failed to parse {drop}. (出现此条请带报错信息联系根派)')
 
         # 添加LS, CE, S4-6, S5-2等的掉落 及 默认龙门币掉落
         for k, stage in enumerate(self.stage_array):
-            self.probs_matrix[k, self.item_dct_rv['龙门币']] = self.cost_lst[k]*12
+            self.probs_matrix[k, self.item_name_rv['龙门币']] = self.cost_lst[k]*12
         self.update_droprate()
 
 
@@ -170,25 +187,27 @@ class MaterialPlanning(object):
         convertion_cost_lst = []
         for rule in self.convertion_rules:
             convertion = np.zeros(len(self.item_array))
-            convertion[self.item_dct_rv[rule['name']]] = 1
+            convertion[self.item_name_rv[rule['name']]] = 1
 
             comp_dct = {comp['name']:comp['count'] for comp in rule['costs']}
             self.convertions_dct[rule['name']] = comp_dct
             for iname in comp_dct:
-                convertion[self.item_dct_rv[iname]] -= comp_dct[iname]
-            convertion[self.item_dct_rv['龙门币']] -= rule['goldCost']
+                convertion[self.item_name_rv[iname]] -= comp_dct[iname]
+            convertion[self.item_name_rv['龙门币']] -= rule['goldCost']
             convertion_matrix.append(copy.deepcopy(convertion))
 
             outc_dct = {outc['name']:outc['count'] for outc in rule['extraOutcome']}
             outc_wgh = {outc['name']:outc['weight'] for outc in rule['extraOutcome']}
             weight_sum = float(rule['totalWeight'])
             for iname in outc_dct:
-                convertion[self.item_dct_rv[iname]] += outc_dct[iname]*self.ConvertionDR*outc_wgh[iname]/weight_sum
+                convertion[self.item_name_rv[iname]] += outc_dct[iname]*self.ConvertionDR*outc_wgh[iname]/weight_sum
             convertion_outc_matrix.append(convertion)
             convertion_cost_lst.append(0)
 
-        convertions_group = (np.array(convertion_matrix), np.array(convertion_outc_matrix), convertion_cost_lst)
-        self.convertion_matrix, self.convertion_outc_matrix, self.convertion_cost_lst = convertions_group
+        self.convertion_matrix = np.array(convertion_matrix)
+        self.convertion_outc_matrix = np.array(convertion_outc_matrix)
+        self.convertion_cost_lst = convertion_cost_lst
+
 
     def _set_lp_parameters(self):
         """
@@ -209,10 +228,11 @@ class MaterialPlanning(object):
     def update(self,
                filter_freq=200,
                filter_stages=[],
-               url_stats='result/matrix?show_stage_details=true&show_item_details=true',
+               url_stats='result/matrix?show_closed_zone=true',
                url_rules='formula',
                path_stats='data/matrix.json',
-               path_rules='data/formula.json'):
+               path_rules='data/formula.json',
+               force=True):
         """
         To update parameters when probabilities change or new items added.
         Args:
@@ -221,22 +241,32 @@ class MaterialPlanning(object):
             path_stats: string. local path to the dropping rate stats data.
             path_rules: string. local path to the composing rules data.
         """
-        print('Requesting data from web resources (i.e., penguin-stats.io)...', end=' ')
-        material_probs, self.convertion_rules = request_data(penguin_url+url_stats, penguin_url+url_rules, path_stats, path_rules)
-        print('done.')
+        print(f'Start to update data {time.asctime(time.localtime(time.time()))}.')
+        if not force: # if not force to update, try loading data from file.
+            try:
+                material_probs, self.convertion_rules = load_data(path_stats, path_rules)
+            except: # loading failed, try loading from server.
+                force = True
+        if force: # load from server.
+            try:
+                print('Requesting data from web resources (i.e., penguin-stats.io)...', end=' ')
+                material_probs, self.convertion_rules = request_data(penguin_url+url_stats, penguin_url+url_rules, path_stats, path_rules)
+                print('done.')
+            except:
+                return
 
         if filter_freq:
             filtered_probs = []
-            for dct in material_probs['matrix']:
-                if dct['times']>=filter_freq and dct['stage']['code'] not in filter_stages:
-                    filtered_probs.append(dct)
+            for drop in material_probs['matrix']:
+                if drop['times']>=filter_freq and drop['stageId'] not in filter_stages:
+                    filtered_probs.append(drop)
             material_probs['matrix'] = filtered_probs
 
-        self._pre_processing(material_probs)
-        self._set_lp_parameters()
+        if self._pre_processing(material_probs) != -1:
+            self._set_lp_parameters()
 
 
-    def _get_plan_no_prioties(self, demand_lst, outcome=False, gold_demand=True, exp_demand=True, convertion_dr=0.18):
+    def _get_plan_no_prioties(self, demand_lst, outcome, gold_demand, exp_demand, convertion_dr, probs_matrix, convertion_matrix, convertion_outc_matrix, cost_lst, convertion_cost_lst):
         """
         To solve linear programming problem without prioties.
         Args:
@@ -246,14 +276,11 @@ class MaterialPlanning(object):
             fun: estimated total cost.
         """
         if convertion_dr != 0.18:
-            convertion_outc_matrix = (self.convertion_outc_matrix - self.convertion_matrix)/0.18*convertion_dr+self.convertion_matrix
-        else:
-            convertion_outc_matrix = self.convertion_outc_matrix
-        A_ub = (np.vstack([self.probs_matrix, convertion_outc_matrix])
-                if outcome else np.vstack([self.probs_matrix, self.convertion_matrix])).T
-        self.farm_cost = (self.cost_lst)
-        cost = (np.hstack([self.farm_cost, self.convertion_cost_lst]))
-        assert np.any(self.farm_cost>=0)
+            convertion_outc_matrix = (convertion_outc_matrix - convertion_matrix)/0.18*convertion_dr+convertion_matrix
+        A_ub = (np.vstack([probs_matrix, convertion_outc_matrix])
+                if outcome else np.vstack([probs_matrix, convertion_matrix])).T
+        cost = (np.hstack([cost_lst, convertion_cost_lst]))
+        assert np.any(cost_lst>=0)
 
         excp_factor = 1.0
         dual_factor = 1.0
@@ -282,8 +309,9 @@ class MaterialPlanning(object):
         return solution, dual_solution, excp_factor
 
 
-    def get_plan(self, requirement_dct, deposited_dct={},
-                 print_output=False, outcome=True, gold_demand=True, exp_demand=False, exclude=[], store=False, convertion_dr=0.18):
+    def get_plan(self, requirement_dct={}, deposited_dct={},
+                 print_output=True, outcome=True, gold_demand=True, exp_demand=True, exclude=[],
+                store=False, convertion_dr=0.18, input_lang='zh', output_lang='zh', server='CN'):
         """
         User API. Computing the material plan given requirements and owned items.
         Args:
@@ -295,218 +323,191 @@ class MaterialPlanning(object):
                       2: 'Problem appears to be infeasible. ',
                       3: 'Problem appears to be unbounded. ',
                       4: 'Numerical difficulties encountered.'}
-        try:
-            demand_lst = np.zeros(len(self.item_array))
-            for k, v in requirement_dct.items():
-                demand_lst[self.item_dct_rv[k]] = v
-            if gold_demand:
-                demand_lst[self.item_dct_rv['龙门币']] = 1e9
-            if exp_demand:
-                demand_lst[self.item_dct_rv['经验']] = 1e9
-            for k, v in deposited_dct.items():
-                demand_lst[self.item_dct_rv[k]] -= v
-        except KeyError:
-            return "材料未找到"
+
+        demand_lst = np.zeros(len(self.item_array))
+        for k, v in requirement_dct.items():
+            demand_lst[self.item_dct_rv[self.item_name_to_id[input_lang][k]]] = v
+        if gold_demand:
+            try:
+                demand_lst[self.item_name_rv['龙门币']] = 1e9 if gold_demand is True else int(gold_demand)
+            except:
+                demand_lst[self.item_name_rv['龙门币']] = 1e9
+        if exp_demand:
+            try:
+                demand_lst[self.item_name_rv['作战记录']] = 1e9 if exp_demand is True else int(exp_demand)
+            except:
+                demand_lst[self.item_name_rv['作战记录']] = 1e9
+        for k, v in deposited_dct.items():
+            demand_lst[self.item_dct_rv[self.item_name_to_id[input_lang][k]]] -= v
+
         if gold_demand == False and exp_demand == True:
             # 如果不需要龙门币 并 需要经验, 就删掉赤金到经验的转化
-            convertion_matrix_bak = copy.copy(self.convertion_matrix)
-            convertion_outc_matrix_bak = copy.copy(self.convertion_outc_matrix)
-            convertion_cost_lst_bak = copy.copy(self.convertion_cost_lst)
-            self.convertion_matrix = self.convertion_matrix[:-1]
-            self.convertion_outc_matrix = self.convertion_outc_matrix[:-1]
-            self.convertion_cost_lst = self.convertion_cost_lst[:-1]
+            convertion_matrix = self.convertion_matrix[:-1]
+            convertion_outc_matrix = self.convertion_outc_matrix[:-1]
+            convertion_cost_lst = self.convertion_cost_lst[:-1]
+        else:
+            convertion_matrix = self.convertion_matrix
+            convertion_outc_matrix = self.convertion_outc_matrix
+            convertion_cost_lst = self.convertion_cost_lst
 
-        if exclude:
-            is_stage_alive = [False if stage in exclude else True for stage in self.stage_array]
-            BackTrace = [
-                copy.copy(self.stage_array),
-                copy.copy(self.cost_lst),
-                copy.copy(self.probs_matrix)
-                ]
-            self.stage_array = self.stage_array[is_stage_alive]
-            self.cost_lst = self.cost_lst[is_stage_alive]
-            self.probs_matrix = self.probs_matrix[is_stage_alive]
-            self.stage_dct_rv = {v:k for k,v in enumerate(self.stage_array)}
+        def alive(stage):
+            if stage in exclude:
+                return False
+            if self.stage_code[server][self.stage_dct_rv[stage]] in exclude:
+                return False
+            return self.valid_stages[server][self.stage_dct_rv[stage]]
 
-        solution, dual_solution, excp_factor = self._get_plan_no_prioties(demand_lst, outcome, gold_demand, exp_demand, convertion_dr)
+
+        is_stage_alive = [alive(stage) for stage in self.stage_array]
+        stage_array = self.stage_array[is_stage_alive]
+        cost_lst = self.cost_lst[is_stage_alive]
+        probs_matrix = self.probs_matrix[is_stage_alive]
+        stage_dct_rv = {v:k for k,v in enumerate(stage_array)}
+
+        solution, dual_solution, excp_factor = self._get_plan_no_prioties(
+            demand_lst, outcome, gold_demand, exp_demand, convertion_dr, probs_matrix,
+            convertion_matrix, convertion_outc_matrix, cost_lst, convertion_cost_lst)
         x, status = solution.x/excp_factor, solution.status
-        y, self.slack = dual_solution.x, dual_solution.slack
-        self.y = y
-        n_looting, n_convertion = x[:len(self.cost_lst)], x[len(self.cost_lst):]
+        y, slack = dual_solution.x, dual_solution.slack
+        n_looting, n_convertion = x[:len(cost_lst)], x[len(cost_lst):]
 
         if status != 0:
             raise ValueError(status_dct[status])
 
-        self.values = [{"level":'1', "items":[]},
+        values = [{"level":'1', "items":[]},
                   {"level":'2', "items":[]},
                   {"level":'3', "items":[]},
                   {"level":'4', "items":[]},
                   {"level":'5', "items":[]}]
 
-        self.item_value = dict()
+        item_values = dict()
 
-        for i,item in enumerate(self.item_array):
-            if y[i]>=0 and '作战记录' not in item and item not in ['龙门币', '赤金', '碳', '碳素', '碳素组', '经验'] and '技巧概要' not in item:
+        for i, item in enumerate(self.item_array):
+            if y[i] >= 0 and '作战记录' not in self.item_id_to_name[item]['zh'] and\
+                    self.item_id_to_name[item]['zh'] not in ['龙门币', '赤金', '碳', '碳素', '碳素组', '经验', '家具'] and\
+                    '技巧概要' not in self.item_id_to_name[item]['zh']:
                 if y[i]>0.1:
                     item_value = {
-                        "name": item,
+                        "name": self.item_id_to_name[item][output_lang],
                         "value": '%.2f'%y[i]
                     }
                 else:
                     item_value = {
-                        "name": item,
+                        "name": self.item_id_to_name[item][output_lang],
                         "value": '%.5f'%(y[i])
                     }
-                self.values[int(self.item_id_array[i][-1])-1]['items'].append(item_value)
-            self.item_value[item] = y[i]
+                if self.item_array[i][-1] in '12345' and len(self.item_array[i]) == 5:
+                    values[int(self.item_array[i][-1])-1]['items'].append(item_value)
+            item_values[item] = y[i]
 
-        for group in self.values:
+        for group in values:
             group["items"] = sorted(group["items"], key=lambda k: float(k['value']), reverse=True)
 
-        cost = np.dot(x[:len(self.cost_lst)], self.cost_lst)
-        gcost = -np.dot(x[len(self.cost_lst):], self.convertion_matrix[:, self.item_dct_rv['龙门币']])
-        gold = np.dot(n_looting, self.probs_matrix[:, self.item_dct_rv['龙门币']])
-        exp = np.dot(n_looting, self.probs_matrix[:, self.item_dct_rv['基础作战记录']])*200 +\
-              np.dot(n_looting, self.probs_matrix[:, self.item_dct_rv['初级作战记录']])*400 +\
-              np.dot(n_looting, self.probs_matrix[:, self.item_dct_rv['中级作战记录']])*1000 +\
-              np.dot(n_looting, self.probs_matrix[:, self.item_dct_rv['经验']])
+        cost = np.dot(x[:len(cost_lst)], cost_lst)
+        gcost = -np.dot(x[len(cost_lst):], convertion_matrix[:, self.item_name_rv['龙门币']])
+        gold = np.dot(n_looting, probs_matrix[:, self.item_name_rv['龙门币']])
+        exp = np.dot(n_looting, probs_matrix[:, self.item_name_rv['基础作战记录']])*200 +\
+              np.dot(n_looting, probs_matrix[:, self.item_name_rv['初级作战记录']])*400 +\
+              np.dot(n_looting, probs_matrix[:, self.item_name_rv['中级作战记录']])*1000 +\
+              np.dot(n_looting, probs_matrix[:, self.item_name_rv['作战记录']])
 
-        self.stages = []
+        stages = []
         for i, t in enumerate(n_looting):
             if t >= 0.1:
-                stage_name = self.stage_array[i]
+                stage_name = stage_array[i]
                 if self.is_gold_or_exp(stage_name):
-                    cost -= t*self.cost_lst[i]
-                    gold -= t*self.probs_matrix[i, self.item_dct_rv['龙门币']]
-                    exp -= t*(self.probs_matrix[i, self.item_dct_rv['基础作战记录']]*200 + 
-                                self.probs_matrix[i, self.item_dct_rv['初级作战记录']]*400 + 
-                                self.probs_matrix[i, self.item_dct_rv['中级作战记录']]*1000 +
-                                self.probs_matrix[i, self.item_dct_rv['经验']])
-                if stage_name[:2] in ['SK', 'AP', 'CE', 'LS', 'PR'] and self.display_main_only:
+                    cost -= t*cost_lst[i]
+                    gold -= t*probs_matrix[i, self.item_name_rv['龙门币']]
+                    exp -= t*(probs_matrix[i, self.item_name_rv['基础作战记录']]*200 + 
+                                probs_matrix[i, self.item_name_rv['初级作战记录']]*400 + 
+                                probs_matrix[i, self.item_name_rv['中级作战记录']]*1000 +
+                                probs_matrix[i, self.item_name_rv['作战记录']])
+                if self.stage_code['CN'][self.stage_dct_rv[stage_name]][:2] in ['SK', 'AP', 'CE', 'LS', 'PR'] and\
+                        self.display_main_only:
                     continue
-                target_items = np.where(self.probs_matrix[i]>0.02)[0]
-                items = {self.item_array[idx]: float2str(self.probs_matrix[i, idx]*t)
-                            for idx in target_items if len(self.item_id_array[idx])==5}
+                target_items = np.where(probs_matrix[i]>0.02)[0]
+                items = {self.item_id_to_name[self.item_array[idx]][output_lang]: float2str(probs_matrix[i, idx]*t)
+                            for idx in target_items if len(self.item_array[idx])==5 and self.item_array[idx] != 'furni'}
                 stage = {
-                    "stage": self.stage_array[i],
+                    "stage": self.stage_id_to_name[stage_array[i]][output_lang],
                     "count": float2str(t),
                     "items": items
                 }
-                self.stages.append(stage)
+                stages.append(stage)
 
 
-        self.syntheses = []
+        syntheses = []
         for i,t in enumerate(n_convertion):
             if t >= 0.1:
-                target_item = self.item_array[np.argmax(self.convertion_matrix[i])]
-                if target_item in ['经验', '龙门币']:
+                target_item = self.item_array[np.argmax(convertion_matrix[i])]
+                if self.item_id_to_name[target_item]['zh'] in ['作战记录', '龙门币']:
                     # 不显示经验和龙门币的转化
                     continue
-                else:
-                    materials = {k: str(v*int(t+0.9)) for k,v in self.convertions_dct[target_item].items()}
+                materials = {self.item_id_to_name[self.item_name_to_id['zh'][k]][output_lang]: f'{v * t:.1f}'
+                             for k, v in self.convertions_dct[self.item_id_to_name[target_item]['zh']].items()}
                 synthesis = {
-                    "target": target_item,
+                    "target": self.item_id_to_name[target_item][output_lang],
                     "count": str(int(t+0.9)),
                     "materials": materials
                 }
-                self.syntheses.append(synthesis)
-            elif t >= 0.05:
-                target_item = self.item_array[np.argmax(self.convertion_matrix[i])]
-                materials = { k: '%.1f'%(v*t) for k,v in self.convertions_dct[target_item].items() }
-                synthesis = {
-                    "target": target_item,
-                    "count": '%.1f'%t,
-                    "materials": materials
-                }
-                self.syntheses.append(synthesis)
+                syntheses.append(synthesis)
 
-        self.res = {
+        res = {
             "cost": int(cost),
             "gcost": int(gcost),
             'gold': int(gold),
             'exp': int(exp),
-            "stages": self.stages,
-            "syntheses": self.syntheses,
-            "values": list(reversed(self.values))
+            "stages": stages,
+            "syntheses": syntheses,
+            "values": list(reversed(values))
         }
 
         if store:
-            green = {item['name']: '%.3f' % (float(item['value'])/Price[item['name']]) for item in self.values[2]['items']}
-            yellow = {item['name']: '%.3f' % (float(item['value'])/Price[item['name']]) for item in self.values[3]['items']}
+            green = {item['name']: '%.3f' % (float(item['value'])/Price[self.item_id_to_name[self.item_name_to_id[output_lang][item['name']]]['zh']]) for item in values[2]['items']}
+            yellow = {item['name']: '%.3f' % (float(item['value'])/Price[self.item_id_to_name[self.item_name_to_id[output_lang][item['name']]]['zh']]) for item in values[3]['items']}
 
-            self.res.update({'green': green,
-                             'yellow': yellow})
+            res.update({'green': green,
+                        'yellow': yellow})
 
         if print_output:
-            print('预计消耗的总体力: %d, 预计可获得龙门币: %d, 经验: %d.'%(self.res['cost'],self.res['gold'],self.res['exp']))
-            print('以下是你要刷哪些副本以及次数:')
-            for stage in self.stages:
+            print('Estimated total cost: %d, gold: %d, exp: %d.'%(res['cost'], res['gold'], res['exp']))
+            print('Loot at following stages:')
+            for stage in stages:
                 display_lst = [k + '(%s) '%stage['items'][k] for k in stage['items']]
-                print('副本 ' + stage['stage'] + '(%s 次) ===> '%stage['count']
-                + ', '.join(display_lst))
+                print('Stage ' + self.stage_code[server][self.stage_name_rv[output_lang][stage['stage']]]
+                      + '(%s times) ===> '%stage['count'] + ', '.join(display_lst))
 
-            print('\n以下是你要合成哪些材料以及次数:')
-            for synthesis in self.syntheses:
+            print('\nSynthesize following items:')
+            for synthesis in syntheses:
                 display_lst = [k + '(%s) '%synthesis['materials'][k] for k in synthesis['materials']]
                 print(synthesis['target'] + '(%s) <=== '%synthesis['count']
                 + ', '.join(display_lst))
 
-            '''print('\nItems Values:')
-            for i, group in reversed(list(enumerate(self.values))):
+            print('\nItems Values:')
+            for i, group in reversed(list(enumerate(values))):
                 display_lst = ['%s:%s'%(item['name'], item['value']) for item in group['items']]
                 print('Level %d items: '%(i+1))
-                print(', '.join(display_lst))'''
+                print(', '.join(display_lst))
         if outcome:
-            plan_str = ('预计消耗的总体力: %d, 预计可获得龙门币: %d, 经验: %d.'%(self.res['cost'],self.res['gold'],self.res['exp']))+'\n'
+            plan_str = ('预计消耗的总体力: %d, 预计可获得龙门币: %d, 经验: %d.'%(res['cost'],res['gold'],res['exp']))+'\n'
             plan_str +=('以下是你要刷哪些副本以及次数:')+'\n'
-            for stage in self.stages:
+            for stage in stages:
                 display_lst = [k + '(%s) '%stage['items'][k] for k in stage['items']]
                 plan_str += ('副本 ' + stage['stage'] + '(%s 次) ===> '%stage['count']
                 + ', '.join(display_lst))+'\n'
 
             plan_str += ('\n以下是你要合成哪些材料以及次数:')+'\n'
-            for synthesis in self.syntheses:
+            for synthesis in syntheses:
                 display_lst = [k + '(%s) '%synthesis['materials'][k] for k in synthesis['materials']]
                 plan_str += (synthesis['target'] + '(%s) <=== '%synthesis['count']
                 + ', '.join(display_lst))+'\n'
 
-            '''print('\nItems Values:')
-            for i, group in reversed(list(enumerate(self.values))):
-                display_lst = ['%s:%s'%(item['name'], item['value']) for item in group['items']]
-                print('Level %d items: '%(i+1))
-                print(', '.join(display_lst))'''
-
-           
-
-        if exclude:
-            self.stage_array = BackTrace[0]
-            self.cost_lst = BackTrace[1]
-            self.probs_matrix = BackTrace[2]
-            self.stage_dct_rv = {v:k for k,v in enumerate(self.stage_array)}
-
-        if gold_demand == False and exp_demand == True:
-            self.convertion_matrix = convertion_matrix_bak
-            self.convertion_outc_matrix = convertion_outc_matrix_bak
-            self.convertion_cost_lst = convertion_cost_lst_bak
-
         if outcome:
             return plan_str
         else:
-            return self.res
-
-    def is_gold_or_exp(self, stage_name, gate=0.1):
-        stageID = self.stage_dct_rv[stage_name]
-        farm_cost = self.farm_cost[stageID]
-        itemPercentage = [(self.item_value[self.item_array[k]]*v/farm_cost, self.item_array[k])
-                            for k,v in enumerate(self.probs_matrix[stageID, :])]
-        display_lst = [x for x in sorted(itemPercentage, key=lambda x:x[0], reverse=True) if x[0] > gate]
-        if display_lst:
-            return display_lst[0][1] in ['基础作战记录', '龙门币', '初级作战记录', '中级作战记录', '经验']
-
-    def update_stage_processing(self, stage_name: str, cost: int):
-        self.stage_array.append(stage_name)
-        self.stage_dct_rv.update({stage_name: len(self.stage_array)-1})
-        self.cost_lst = np.append(self.cost_lst, cost)
+            return res
+    def is_gold_or_exp(self, stage_name):
+        return self.stage_code['CN'][self.stage_dct_rv[stage_name]][:2] in ['LS', 'CE']
 
     def update_droprate(self):
         self.update_droprate_processing('S4-6', '龙门币', 3228)
@@ -517,11 +518,11 @@ class MaterialPlanning(object):
         self.update_droprate_processing('CE-3', '龙门币', 4100, 'update')
         self.update_droprate_processing('CE-4', '龙门币', 5700, 'update')
         self.update_droprate_processing('CE-5', '龙门币', 7500, 'update')
-        self.update_droprate_processing('LS-1', '经验', 1600, 'update')
-        self.update_droprate_processing('LS-2', '经验', 2800, 'update')
-        self.update_droprate_processing('LS-3', '经验', 3900, 'update')
-        self.update_droprate_processing('LS-4', '经验', 5900, 'update')
-        self.update_droprate_processing('LS-5', '经验', 7400, 'update')
+        self.update_droprate_processing('LS-1', '作战记录', 1600, 'update')
+        self.update_droprate_processing('LS-2', '作战记录', 2800, 'update')
+        self.update_droprate_processing('LS-3', '作战记录', 3900, 'update')
+        self.update_droprate_processing('LS-4', '作战记录', 5900, 'update')
+        self.update_droprate_processing('LS-5', '作战记录', 7400, 'update')
 
     def update_convertion_processing(self, target_item: tuple, cost: int, source_item: dict, extraOutcome: dict):
         '''
@@ -532,47 +533,64 @@ class MaterialPlanning(object):
         '''
         toAppend = dict()
         Outcome, rate, totalWeight = extraOutcome
-        toAppend['costs'] = [{'count':x[1]/target_item[1], 'id':self.item_dct_rv[x[0]], 'name':x[0]} for x in source_item.items()]
-        toAppend['extraOutcome'] = [{'count': rate, 'id': self.item_dct_rv[x[0]], 'name': x[0], 'weight': x[1]/target_item[1]} for x in Outcome.items()]
+        toAppend['costs'] = [{'count':x[1]/target_item[1], 'id':self.item_name_rv[x[0]], 'name':x[0]} for x in source_item.items()]
+        toAppend['extraOutcome'] = [{'count': rate, 'id': self.item_name_rv[x[0]], 'name': x[0], 'weight': x[1]/target_item[1]} for x in Outcome.items()]
         toAppend['goldCost'] = cost/target_item[1]
-        toAppend['id'] = self.item_dct_rv[target_item[0]]
+        toAppend['id'] = self.item_name_to_id['zh'][target_item[0]]
         toAppend['name'] = target_item[0]
         toAppend['totalWeight'] = totalWeight
         self.convertion_rules.append(toAppend)
 
     def update_convertion(self):
-        # TODO: 考虑芯片/基建材料的不同副产物掉落
-        self.update_convertion_processing(('经验', 200), 0, {'基础作战记录': 1}, ({}, 0, 1))
-        self.update_convertion_processing(('经验', 400), 0, {'初级作战记录': 1}, ({}, 0, 1))
-        self.update_convertion_processing(('经验', 1000), 0, {'中级作战记录': 1}, ({}, 0, 1))
+        # 之前的TODO: 考虑芯片/基建材料的不同副产物掉落 <- 不做了, 一般人不用planner做芯片规划
+        self.update_convertion_processing(('作战记录', 200), 0, {'基础作战记录': 1}, ({}, 0, 1))
+        self.update_convertion_processing(('作战记录', 400), 0, {'初级作战记录': 1}, ({}, 0, 1))
+        self.update_convertion_processing(('作战记录', 1000), 0, {'中级作战记录': 1}, ({}, 0, 1))
+        self.update_convertion_processing(('作战记录', 1000), 0, {'高级作战记录': 1}, ({}, 0, 1))
         # 这里一定保证这一条在最后!
-        self.update_convertion_processing(('经验', 400), 0, {'赤金': 1}, ({}, 0, 1))
+        # ENSURE THIS LINE IS THE LAST LINE!
+        self.update_convertion_processing(('作战记录', 400), 0, {'赤金': 1}, ({}, 0, 1))
 
     def update_stage(self):
-        self.update_stage_processing('LS-1', 10)
-        self.update_stage_processing('LS-2', 15)
-        self.update_stage_processing('LS-3', 20)
-        self.update_stage_processing('LS-4', 25)
-        self.update_stage_processing('LS-5', 30)
-        self.update_stage_processing('CE-1', 10)
-        self.update_stage_processing('CE-2', 15)
-        self.update_stage_processing('CE-3', 20)
-        self.update_stage_processing('CE-4', 25)
-        self.update_stage_processing('CE-5', 30)
+        self.update_stage_processing('LS-1', 10, 'wk_kc_1')
+        self.update_stage_processing('LS-2', 15, 'wk_kc_2')
+        self.update_stage_processing('LS-3', 20, 'wk_kc_3')
+        self.update_stage_processing('LS-4', 25, 'wk_kc_4')
+        self.update_stage_processing('LS-5', 30, 'wk_kc_5')
+        self.update_stage_processing('CE-1', 10, 'wk_melee_1')
+        self.update_stage_processing('CE-2', 15, 'wk_melee_2')
+        self.update_stage_processing('CE-3', 20, 'wk_melee_3')
+        self.update_stage_processing('CE-4', 25, 'wk_melee_4')
+        self.update_stage_processing('CE-5', 30, 'wk_melee_5')
+
+    def update_stage_processing(self, stage_name: str, cost: int, code: str) -> None:
+        self.stage_array.append(code)
+        self.stage_dct_rv.update({code: len(self.stage_array)-1})
+        self.cost_lst = np.append(self.cost_lst, cost)
+        servers = ['CN', 'US', 'JP', 'KR']
+        for server in servers:
+            self.stage_code[server].append(stage_name)
+            self.valid_stages[server].append(True)
 
     def update_droprate_processing(self, stage, item, droprate, mode='add'):
-        if stage not in self.stage_array:
+        if stage not in self.stage_name_rv['zh']:
+            print(f'stage {stage} not found')
             return
-        if item not in self.item_array:
+        if item not in self.item_name_rv:
+            print(f'item {item} not found')
             return
-        stageid = self.stage_dct_rv[stage]
-        itemid = self.item_dct_rv[item]
+        stageid = self.stage_name_rv['zh'][stage]
+        itemid = self.item_name_rv[item]
         if mode == 'add':
             self.probs_matrix[stageid][itemid] += droprate
         elif mode == 'update':
             self.probs_matrix[stageid][itemid] = droprate
 
 
+def get_json(s):
+    req = urllib.request.Request(penguin_url + s, None, headers)
+    with urllib.request.urlopen(req, timeout=5) as response:
+        return json.loads(response.read().decode())
 
 def Cartesian_sum(arr1, arr2):
     arr_r = []
@@ -611,13 +629,13 @@ def request_data(url_stats, url_rules, save_path_stats, save_path_rules):
         pass
 
     req = urllib.request.Request(url_stats, None, headers)
-    with urllib.request.urlopen(req) as response:
+    with urllib.request.urlopen(req, timeout=5) as response:
         material_probs = json.loads(response.read().decode())
         with open(save_path_stats, 'w') as outfile:
             json.dump(material_probs, outfile)
 
     req = urllib.request.Request(url_rules, None, headers)
-    with urllib.request.urlopen(req) as response:
+    with urllib.request.urlopen(req, timeout=5) as response:
         response = urllib.request.urlopen(req)
         convertion_rules = json.loads(response.read().decode())
         with open(save_path_rules, 'w') as outfile:

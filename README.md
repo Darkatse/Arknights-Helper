@@ -1,39 +1,30 @@
-# QQ bot-Arknights Helper-Remix
-A qq bot based on nonebot and coolq
+# Arknights Helper-Remix
+A QQ bot based on nonebot and mirai/mirai-http-api
 
 ## Description
-目前功能：材料规划 抽卡
+目前功能：公招计算 材料规划 模拟抽卡
 ## Usage
-1. ~~tag list split by space~~
->~~e.g. 近卫 男~~
+1. tag 用空格隔开  
+e.g. 治疗 先锋
 
->**~~Result~~**\
->~~【近卫】:~~
->~~幽灵鲨★5, 因陀罗★5, 杜宾★4, 艾丝黛尔★4, 慕斯★4, 霜叶★4, 缠丸★4, Castle-3★1, ★1~3...1~~
+>**Result**\
+>【治疗+先锋干员】:桃金娘★4
 >
->~~【男】:~~
->~~角峰★4, Castle-3★1, ★1~3...6~~
+>【先锋干员】:桃金娘★4 清道夫★4 红豆★4 德克萨斯★5 凛冬★5 ★1~★3...4
 >
->~~【近卫+男】:~~
->~~Castle-3★1~~
+>【治疗】:苏苏洛★4 桃金娘★4 清流★4 白面鸮★5 赫默★5 华法琳★5 临光★5 夜魔★5 末药★4 调香师★4 古米★4 ★1~★3...4
 
-2. ~~send a screenshot of tags in game, get result as above~~
 
-3. ~~tell character name~~
 
-4. ~~@this_bot update_data~~
-
->~~update character data from wiki~~
-
-## 由于着迷网Wiki关闭  tag查询等以上功能暂不可用 以下功能目前可用：
-
-5. @this_bot arkone / arkten
+2. @this_bot arkone / arkten  
+   模拟单抽/十连抽卡
 
 >抽卡 卡池位于recruit.py 需要手动更新
 
 
 
-6. mati/材料 固源岩组
+3. mati/材料 固源岩组 2 异铁组 5  
+   刷图计算，命令后加需要刷的材料和个数，均以空格隔开
 
 ## File Structure
 ```
@@ -49,6 +40,8 @@ A qq bot based on nonebot and coolq
    │      │  material.py         材料规划
    │      │  MaterialPlanning.py 材料规划接口 来自https://github.com/ycremar/ArkPlanner
    │      │  orc_tool.py         图片识别
+   |      |  tag_processing.py   公招计算
+   |      |  TagLogic.py         公招计算接口 
    │      │  record.py           
    │      │  recruit.py          抽卡
    │      └─ tuchuang.py         图床 用于图片识别
@@ -68,33 +61,38 @@ Packages:   nonebot>=1.3.0
 ```
 
 ## Usage
-### 1. Run Bot
-`python bot.py`\
-or\
-`nohup python bot.py >nohup.out 2>&1 &`
-> use `python3 bot.py` for your need
-
-### 2. Get It Work
-#### Windows
-
-1. Download [CoolQ](https://cqp.cc/b/news), install it.
-> CoolQ Air version is for free but can receive/~send~ image
-2. Add CoolQ plugin [CoolQ HTTP API](https://cqhttp.cc/docs/4.10/#/), install it follow the instruction.
-3. Run CoolQ and Activate the plugin above.
-4. Configure CoolQ HTTP API follow this [instruction](https://none.rclab.tk/guide/getting-started.html#%E9%85%8D%E7%BD%AE-coolq-http-api-%E6%8F%92%E4%BB%B6)
-5. Run Bot
-
-#### Linux
-Bucause CoolQ has no linux version, but we can run it in docker.
-1. Install [Docker](https://docs.docker.com/install/linux/docker-ce/ubuntu/)
-2. Get and Run Docker CoolQ (with CoolQ HTTP API) image follow this [instruction](https://cqhttp.cc/docs/4.10/#/?id=%E4%BD%BF%E7%94%A8-docker)
-3. Run CoolQ and Activate the plugin above.
-4. Configure CoolQ HTTP API follow this [instruction](https://none.rclab.tk/guide/getting-started.html#%E9%85%8D%E7%BD%AE-coolq-http-api-%E6%8F%92%E4%BB%B6), note that you should use post_url as 172.17.0.1 instead of 127.0.0.1 because of using Docker.
-5. Run Bot
-
+### 1. 下载 [mirai](https://github.com/mamoe/mirai) + [mirai-api-http](https://github.com/project-mirai/mirai-api-http)/[go-cqhttp](https://github.com/Mrs4s/go-cqhttp)
+[mirai](https://github.com/mamoe/mirai)是当前最潮最in的机器人框架，之后的一切都是基于该框架。如果你还没来得及拥有的话就赶快下载吧！ ~~棒读~~  
+或者也可以选择优秀的拓展客户端[go-cqhttp](https://github.com/Mrs4s/go-cqhttp)，拥有许多拓展功能的同时兼容了[Onebot](https://github.com/botuniverse/onebot/blob/master/README.md)  
+### 2. Clone 或者下载这个项目
+```
+git clone https://github.com/Darkatse/Arknights-Helper
+```
+### 3. 安装[Nonebot](https://github.com/nonebot/nonebot)以及其他依赖
+首先安装[Nonebot](https://github.com/nonebot/nonebot)  
+可以使用 pip 安装已发布的最新版本：
+```
+pip install nonebot
+```
+安装本程序相应的依赖
+```
+pip install -r akaisora/requirement.txt
+```
+### 4. 配置反向ws服务端并启动本bot
+参考[该链接](https://docs.nonebot.dev/guide/installation.html#cqhttp-%E6%8F%92%E4%BB%B6-%E5%B7%B2%E5%BC%83%E7%94%A8)来配置[mirai-api-http](https://github.com/project-mirai/mirai-api-http)的反向ws服务端，默认配置为 http://127.0.0.1:9090 , 如果遇到端口冲突可以在config.py中修改  
+最后启动bot  
+```
+python bot.py
+or
+nohup python bot.py >nohup.out 2>&1 & #后台运行
+```
+enjoy it !
 ## Acknowledgements
 Thanks for nonebot's very detailed instruction.\
-https://none.rclab.tk/
+https://docs.nonebot.dev/
 
 Thanks for character data from MRFZ-wiki.\
-http://wiki.joyme.com/arknights/%E5%B9%B2%E5%91%98%E6%95%B0%E6%8D%AE%E8%A1%A8
+https://prts.wiki/
+
+Thanks for recruitment data from bigfun.\
+https://www.bigfun.cn/tools/aktools/hr

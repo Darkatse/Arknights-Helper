@@ -45,7 +45,9 @@ class Material(object):
         res=self.format(name)
         self.record.add(name)
         '''
-        requirement_dct = {name:1}
+        #requirement_dct = {name:1}
+        name = name.split()
+        requirement_dct = dict([(x, y) for x, y in zip(name[::2], name[1::2])])
         return mp.get_plan(requirement_dct)
     def export_table_md(self):
         
